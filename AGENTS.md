@@ -8,15 +8,14 @@
 
 ## 1. 项目概览
 
-个人代理部署方案。核心架构：
+个人代理部署方案，包含两个协议：
 
 ```text
-客户端 mihomo 内核  ──VLESS+REALITY+Vision(TCP 443)──▶  VPS: Xray 服务端  （主入口）
-                    ──Hysteria2(UDP)────────────────▶  VPS: hysteria 服务端（备线）
-                    ──VLESS+XHTTP(TCP,过 CDN)────────▶  VPS: Xray 服务端  （IP被封时）
+客户端 mihomo 内核  ──VLESS+REALITY+Vision(TCP 443)──▶  VPS: Xray 服务端
+                    ──Hysteria2(UDP 443)────────────▶  VPS: hysteria 服务端
 ```
 
-**设计意图**：REALITY 直连保证伪装性与性能，Hysteria2 保证弱网表现，XHTTP 提供过 CDN 的最后手段。三条路径独立。
+**设计意图**：VLESS 走 TCP 保证伪装性与防火墙友好度，Hysteria2 走 UDP 保证弱网性能。两条路径独立，任一失效不影响另一条。
 
 ---
 
@@ -27,7 +26,7 @@
 | 服务端系统 | Debian 11 / Ubuntu 20.04 | 其他发行版需调整包管理命令 |
 | 服务端权限 | root | 绑定 443 端口、写 systemd unit |
 | 客户端 | Clash Verge Rev ≥ 2.0 | 或任何 mihomo 内核客户端 |
-| 域名 | 仅 XHTTP 过 CDN 时需要 | REALITY / Hysteria2 不需要 |
+| 域名 | **不需要** | 两个协议均可用 Reality / 自签证书 |
 
 ---
 
@@ -64,6 +63,7 @@ curl -H "Authorization: Bearer $KEY" \
 systemctl status xray hysteria-server --no-pager
 ss -tulnp | grep -E ':(443|{{SSH_PORT}})'
 journalctl -u xray -n 50 --no-pager
+journalctl -u hysteria-server -n 50 --no-pager
 xray version
 ```
 
@@ -80,11 +80,11 @@ xray uuid       # 生成 UUID
 
 ```text
 .
-├── README.md              # 面向人类的全部内容（部署、排障、选型）
+├── README.md              # 面向人类的全部内容（协议、服务端、客户端）
 ├── AGENTS.md              # ← 本文件：Agent 入口
 ├── VERSIONS.md            # 版本基线与破坏性变更记录
 ├── examples/
-│   ├── server-xray.jsonc  # 服务端完整示例
+│   ├── server-xray.jsonc  # 服务端 VLESS+REALITY 示例
 │   ├── client-mihomo.yaml # 客户端完整示例
 │   └── warp-outbound.md   # WARP 出口配置
 └── .gitignore
@@ -98,7 +98,7 @@ xray uuid       # 生成 UUID
 
 ### 可以做
 
-- 按 README 在目标 VPS 部署协议
+- 按 README 在目标 VPS 部署 VLESS 或 Hysteria2
 - 修改客户端 `profiles/*.yaml` 增删节点、调整规则
 - 通过 REST API 切换节点、测延迟、查状态
 - 提交 PR 修正文档错误、补充新协议
@@ -109,6 +109,7 @@ xray uuid       # 生成 UUID
 - **不要**在未经用户确认时执行 `systemctl restart` 或改防火墙规则（可能锁死 SSH）
 - **不要**跨内核复制配置——字段名不同，会静默失效
 - **不要**假设 `curl` 能连通就代表协议可用
+- **不要**给 VLESS 配空 flow，也**不要**给 Hysteria2 加 Vision flow
 
 ---
 
@@ -150,7 +151,7 @@ grep -rEn '([0-9]{1,3}\.){3}[0-9]{1,3}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a
 任何部署或配置变更后**按顺序**执行：
 
 - [ ] `systemctl is-active xray hysteria-server` 均为 `active`
-- [ ] `ss -tulnp` 能看到预期端口
+- [ ] `ss -tlnp` 能看到 TCP 443，`ss -ulnp` 能看到 UDP 443
 - [ ] 服务端本机自连可通过（排除客户端因素）
 - [ ] 客户端通过该节点能访问外网
 - [ ] `GET /proxies` 能看到该节点且类型正确
@@ -180,9 +181,8 @@ flowchart TB
 
 ```bash
 gh api repos/XTLS/Xray-core/releases/latest --jq '.tag_name'
-gh api repos/SagerNet/sing-box/releases/latest --jq '.tag_name'
+gh api repos/apernet/hysteria/releases/latest --jq '.tag_name'
 gh api repos/MetaCubeX/mihomo/releases/latest --jq '.tag_name'
-gh api repos/2dust/v2rayN/releases/latest --jq '.tag_name'
 gh api repos/clash-verge-rev/clash-verge-rev/releases/latest --jq '.tag_name'
 
 # Atom feed（含预发布，注意区分 alpha）
@@ -211,9 +211,7 @@ The feature VLESS (with no Flow, etc.) is deprecated, not recommended for using
 and might be removed. Please migrate to VLESS with Flow & Seed as soon as possible.
 ```
 
-**REALITY 场景**：必须写 `"flow": "xtls-rprx-vision"`，客户端同步配置 `flow: xtls-rprx-vision`。
-
-**XHTTP 场景**：不能用 Vision flow，`flow` 留空；但仍建议启用 VLESS Encryption。
+必须写 `"flow": "xtls-rprx-vision"`，客户端同步配置 `flow: xtls-rprx-vision`。
 
 ### 🔴 TUN 模式会让所有直连测试失效
 
@@ -244,11 +242,9 @@ tcpdump -n -i any "host {{CLIENT_IP}} and tcp port 443" -c 20 -v
 
 ### 🔴 配置不能跨内核复制
 
-| 功能 | Xray | mihomo / sing-box |
+| 功能 | Xray | mihomo |
 |---|---|---|
-| 跳过证书校验 | `pinnedPeerCertSha256`（字符串） | `skip-cert-verify: true` / `tls.insecure` |
-| 传输层名 | `network: "xhttp"` | `network: xhttp` |
-| XHTTP 参数块 | `xhttpSettings` | `xhttp-opts` |
+| 跳过证书校验 | `pinnedPeerCertSha256`（字符串） | `skip-cert-verify: true` |
 | Flow 字段 | `settings.clients[].flow` | `flow: xtls-rprx-vision` |
 
 ### 🔴 进程未重启导致配置漂移
@@ -265,14 +261,9 @@ Xray 启动时会警告：
 
 > `REALITY: Listening on non-443 ports may get your IP blocked by the GFW`
 
-### 🔴 XHTTP 的 CDN 相关坑
+### 🔴 Hysteria2 自签证书需客户端跳过校验
 
-| 问题 | 解决 |
-|---|---|
-| 连不上 CF | 面板启用 gRPC 支持 |
-| 无法穿透 Nginx | `proxy_pass` 改 `grpc_pass` |
-| 长连接被掐断 | CF 会断下行 100 秒无数据的 HTTP，应用层需保活 |
-| 页面加载极慢 | 部分客户端 `auto` 不生效，手写 `h2+stream-up` 或 `h3+packet-up` |
+客户端必须设 `skip-cert-verify: true`，否则报 `x509: certificate signed by unknown authority`。Xray 的 `allowInsecure` 已被移除，改用 `pinnedPeerCertSha256`。
 
 ### 🔴 GUI 客户端配置可能存于数据库
 
@@ -285,11 +276,8 @@ v2rayN 配置存 `guiNDB.db`（SQLite），修改前必须完全退出程序。�
 - Xray-core — <https://github.com/XTLS/Xray-core>
 - REALITY 文档 — <https://xtls.github.io/config/transports/reality.html>
 - Xray 官方示例 — <https://github.com/XTLS/Xray-examples>
-- XHTTP 详解 — <https://github.com/XTLS/Xray-core/discussions/4113>
-- XHTTP 五合一配置 — <https://github.com/XTLS/Xray-core/discussions/4118>
 - VLESS Flow 迁移 — <https://github.com/XTLS/Xray-core/discussions/5568>
 - Hysteria2 — <https://v2.hysteria.network/>
-- sing-box — <https://github.com/SagerNet/sing-box>
 - mihomo — <https://github.com/MetaCubeX/mihomo>
 - Clash Verge Rev — <https://github.com/clash-verge-rev/clash-verge-rev>
 - AGENTS.md 规范 — <https://agents.md>

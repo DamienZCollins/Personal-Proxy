@@ -1,13 +1,11 @@
-// Xray 服务端示例配置
+// Xray 服务端示例配置（VLESS + REALITY）
 //
 // 关键点：
-//   - VLESS 必须配 Flow（裸 VLESS 已弃用）
+//   - VLESS 必须配 Flow，裸 VLESS 已被 Xray 弃用
 //   - REALITY 不要跑在非 443 端口
-//   - XHTTP 不能用 Vision flow
-//   - 两个 TCP 入站不能同时占用 443
 //
 // 生成密钥：
-//   xray x25519      → REALITY 密钥对
+//   xray x25519      → REALITY 密钥对（PrivateKey 给服务端，PublicKey 给客户端）
 //   xray uuid        → UUID
 //
 // 用法：复制到 /usr/local/etc/xray/config.json，替换 {{PLACEHOLDER}}
@@ -18,9 +16,8 @@
   },
 
   "inbounds": [
-    // ══ 入口一：VLESS + REALITY + Vision（推荐主入口）══════════
     {
-      "tag": "reality",
+      "tag": "vless",
       "listen": "0.0.0.0",
       "port": 443,
       "protocol": "vless",
@@ -73,9 +70,10 @@
   "routing": {
     "domainStrategy": "IPOnDemand",
     "rules": [
+      // 阻止代理客户端访问私网 / 链路本地地址
       {
         "type": "field",
-        "inboundTag": ["reality"],
+        "inboundTag": ["vless"],
         "ip": [
           "10.0.0.0/8",
           "172.16.0.0/12",
