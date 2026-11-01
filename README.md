@@ -1,53 +1,104 @@
 # Personal-Proxy
 
-三个协议的完整部署指南：**VLESS**、**XHTTP**、**Hysteria2**。
+三个协议的部署指南：**VLESS**、**XHTTP**、**Hysteria2**。
 
-每个协议独立成章，包含服务端部署、客户端配置、验证方法。按需选择，不必全上。
-
-> 仓库不含任何真实节点、IP、域名或密钥，全部使用 `{{PLACEHOLDER}}` 占位。
-> AI Agent 规范见 [`AGENTS.md`](./AGENTS.md) ｜ 版本基线见 [`VERSIONS.md`](./VERSIONS.md)
+> 仓库不含任何真实节点、IP、域名或密钥，全部用 `{{PLACEHOLDER}}` 占位。
+> Agent 规范见 [`AGENTS.md`](./AGENTS.md) ｜ 版本基线见 [`VERSIONS.md`](./VERSIONS.md)
 
 ---
 
-## 选哪个
+# 一、三种协议
+
+## 对比
+
+| | **VLESS** | **XHTTP** | **Hysteria2** |
+|---|---|---|---|
+| 类型 | 协议 | **传输层**（配 VLESS 用） | 协议 |
+| 传输 | TCP 443 | TCP，可过 CDN | UDP 443 |
+| 需要域名 | ❌ | 直连 ❌ / 过 CDN ✅ | ❌ |
+| 需要证书 | ❌（Reality 借用） | ❌（直连）/ ✅（过 CDN） | 自签即可 |
+| 抗主动探测 | ⭐⭐⭐ | ⭐⭐ | ⭐⭐ |
+| 弱网性能 | ⭐⭐ | ⭐⭐ | ⭐⭐⭐ |
+| 过 CDN | ❌ | ⭐⭐⭐ 唯一支持 | ❌ |
+| 成熟度 | ⭐⭐⭐ 最稳定 | ⭐⭐ 演进中 | ⭐⭐⭐ |
+
+## 各自解决什么问题
 
 ```mermaid
 flowchart TB
     A[你的网络环境] --> B{TCP 443 直连可用?}
-    B -->|可用| C["VLESS + REALITY<br/>或 XHTTP + REALITY<br/>均无需域名"]
+    B -->|可用| C["VLESS + Reality<br/>或 XHTTP + Reality<br/>无需域名"]
     B -->|被封锁| D{TCP 整体可用?}
     D -->|可用| E["XHTTP + CDN<br/>需要域名"]
     D -->|否| F["Hysteria2<br/>走 UDP 绕开"]
 ```
 
-| 协议 | 传输 | 需要域名 | 一句话 |
-|---|---|---|---|
-| **VLESS** | TCP 443 | ❌ | 伪装成真实网站，最成熟稳定 |
-| **XHTTP** | TCP，可过 CDN | **直连 ❌ / 过 CDN ✅** | 可用 TLS1.2、上下行分离、可过 CDN |
-| **Hysteria2** | UDP 443 | ❌ | QUIC 抢带宽，弱网最强 |
+- **VLESS** — 伪装成真实网站，最成熟。解决「直连时如何不被识别」
+- **XHTTP** — 传输层，提供上下行分离、TLS 1.2、可过 CDN。解决「需要进阶伪装或 IP 被封」
+- **Hysteria2** — 基于 QUIC，激进拥塞控制。解决「TCP 受限或弱网」
 
-**三者关系**：不是替代，是互补。
+三者互补，可同时部署。
 
-- **VLESS** 解决「直连时如何不被识别」，最成熟稳定
-- **XHTTP** 既可直连（配 Reality，无需域名），也可过 CDN（需域名），另有上下行分离等进阶能力
-- **Hysteria2** 解决「TCP 受限时如何走 UDP」
+## VLESS 原理
 
-> ⚠️ **XHTTP 不必然需要域名**。只有「过 CDN」或「自有 TLS 证书」时才需要。直连场景用 `XHTTP + Reality` 即可，与 VLESS+Reality 一样零域名零证书。
-可以同时部署，客户端按需切换。
+```mermaid
+sequenceDiagram
+    participant C as 客户端
+    participant S as VPS
+    participant T as 真实站点(bing.com)
+    C->>S: TLS 握手 (SNI=bing.com)
+    S->>T: 转发握手
+    T-->>S: 真实证书
+    S-->>C: 原样返回
+    Note over C,S: 审查者看到访问的是 bing.com<br/>认证通过后转为代理流量
+```
+
+用 **REALITY** 借用真实站点的证书和握手，**不需要自己申请证书**，也无法被主动探测识别。
+
+配 `xtls-rprx-vision` 流控消除 TLS-in-TLS 特征。
+
+## XHTTP 原理
+
+XHTTP 是**传输层**，不是独立协议。
+
+```mermaid
+flowchart LR
+    subgraph A["直连（无需域名）"]
+        C1[客户端] -->|"xhttp + reality"| S1["VPS:443"]
+    end
+    subgraph B["过 CDN（需域名）"]
+        C2[客户端] -->|HTTPS| CDN["Cloudflare"]
+        CDN -->|回源| S2["VPS"]
+    end
+```
+
+四个独立优势：
+
+| 优势 | 说明 |
+|---|---|
+| **可用 TLS 1.2** | Reality 只能用 TLS 1.3，某些地区已封锁 TLS 1.3 |
+| **上下行分离** | 发包和收包可走完全不同路径（IPv4/IPv6、直连/CDN、不同国家） |
+| **流量混淆** | `packet-up`/`stream-up` 拆成双连接，天然规避 TLS-in-TLS |
+| **可过 CDN** | 藏在 CDN 后面，抬高封锁成本 |
+
+> XHTTP 不能配 `xtls-rprx-vision`，`flow` 必须留空。
+
+## Hysteria2 原理
+
+基于 QUIC（UDP），自带 Brutal 拥塞控制，丢包严重时仍能跑满带宽。配 Salamander 混淆可干扰运营商的 QUIC 流量识别。
 
 ---
 
+# 二、服务端配置
+
 ## 通用前置
 
-### 1. SSH 安全登录
+### SSH 安全登录
 
 **先确保密钥登录可用，再动任何网络配置**，否则可能把自己锁在门外。
 
 ```bash
-# 本地生成密钥（已有可跳过）
 ssh-keygen -t ed25519 -C "proxy-vps"
-
-# 推送到服务器
 ssh-copy-id -i ~/.ssh/id_ed25519.pub root@{{VPS_IP}}
 ```
 
@@ -69,21 +120,9 @@ sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd
 systemctl restart ssh
 ```
 
-> ⚠️ 改 `sshd_config` 前先开第二个终端确认密钥能登录。建议同时把 SSH 改到非标准端口。
+> ⚠️ 改前先开第二个终端确认密钥能登录。建议同时把 SSH 改到非标准端口。
 
-### 2. 客户端
-
-统一使用 **Clash Verge Rev**（mihomo 内核，纯 YAML 配置）。三个协议它都原生支持。
-
-配置文件位置：
-
-```text
-Windows: %APPDATA%\io.github.clash-verge-rev.clash-verge-rev\profiles\
-macOS:   ~/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev/profiles/
-Linux:   ~/.config/io.github.clash-verge-rev.clash-verge-rev/profiles/
-```
-
-### 3. 端口冲突说明
+### 端口规划
 
 | 组合 | 是否冲突 |
 |---|---|
@@ -94,29 +133,7 @@ Linux:   ~/.config/io.github.clash-verge-rev.clash-verge-rev/profiles/
 
 ---
 
-# 一、VLESS（REALITY + Vision）
-
-**伪装成真实网站，无需域名和证书。直连首选。**
-
-## 原理
-
-```mermaid
-sequenceDiagram
-    participant C as 客户端
-    participant S as VPS
-    participant T as 真实站点(如 bing.com)
-    C->>S: TLS 握手 (SNI=bing.com)
-    S->>T: 转发握手
-    T-->>S: 真实证书 + 握手响应
-    S-->>C: 原样返回
-    Note over C,S: 审查者看到的是访问 bing.com<br/>认证通过后转为代理流量
-```
-
-REALITY 复用真实站点的证书和握手，**不需要自己申请证书**，也无法被主动探测识别。
-
-`xtls-rprx-vision` 是 VLESS 的流控模式，消除 TLS-in-TLS 特征。
-
-## 服务端部署
+## 2.1 VLESS 服务端
 
 ### 安装 Xray
 
@@ -148,9 +165,6 @@ xray uuid
 | 支持 TLSv1.3 + H2 | 必须 |
 | 域名不重定向 | `example.com` → `www.example.com` 这种不行 |
 | 延迟低 | 与 VPS 地理位置近 |
-| 非通用 CDN 域名 | 避免 Cloudflare 广泛共用的域名 |
-
-推荐类型：`www.microsoft.com`、`dl.google.com` 等。
 
 验证目标可用：
 
@@ -189,7 +203,7 @@ openssl s_client -connect {{REALITY_TARGET}}:443 -servername {{REALITY_TARGET}} 
         "security": "reality",
         "realitySettings": {
           "show": false,
-          // 新版字段名为 target，旧版 dest，二者兼容
+          // 新版字段名为 target，旧版 dest
           "dest": "{{REALITY_TARGET}}:443",
           "serverNames": ["{{REALITY_TARGET}}"],
           "privateKey": "{{REALITY_PRIVATE_KEY}}",
@@ -206,110 +220,28 @@ openssl s_client -connect {{REALITY_TARGET}}:443 -servername {{REALITY_TARGET}} 
 }
 ```
 
-### 启动
+### 启动与自检
 
 ```bash
 systemctl enable --now xray
 systemctl is-active xray
 ss -tlnp | grep :443
 journalctl -u xray -n 30 --no-pager
-```
 
-### 服务端自检
-
-```bash
+# 服务端自检：应返回目标站点真实证书
 openssl s_client -connect {{LOCALHOST}}:443 -servername {{REALITY_TARGET}} </dev/null 2>&1 \
   | grep -E "subject=|Verify return code"
-# 应返回目标站点的真实证书，Verify return code: 0
-```
-
-## 客户端配置
-
-加入 mihomo 配置：
-
-```yaml
-proxies:
-  - name: "VLESS"
-    type: vless
-    server: {{VPS_IP}}
-    port: 443
-    uuid: {{UUID}}
-    network: tcp
-    tls: true
-    udp: true
-    # ★ 必须与服务端 flow 一致
-    flow: xtls-rprx-vision
-    servername: {{REALITY_TARGET}}
-    client-fingerprint: chrome
-    reality-opts:
-      public-key: {{REALITY_PUBLIC_KEY}}
-      short-id: {{REALITY_SHORT_ID}}
-```
-
-## 验证
-
-```bash
-curl -s -o /dev/null -w "%{http_code}\n" --max-time 15 \
-  --socks5-hostname {{LOCALHOST}}:7897 https://www.gstatic.com/generate_204
-# 期望 204
 ```
 
 ---
 
+## 2.2 XHTTP 服务端
 
-# 二、XHTTP
+两种方案，按是否需要域名选。
 
-**VLESS 之上的传输层。两种用法：直连（无需域名）或过 CDN（需域名）。**
+### 方案 A：XHTTP + Reality（无需域名）
 
-## 原理
-
-XHTTP 是**传输层**，不是独立协议，配合 VLESS 使用。
-
-```mermaid
-flowchart LR
-    subgraph A["方案A：直连"]
-        C1[客户端] -->|"xhttp + reality"| S1["VPS:443"]
-    end
-    subgraph B["方案B：过 CDN"]
-        C2[客户端] -->|"HTTPS"| CDN["Cloudflare"]
-        CDN -->|"回源"| S2["VPS"]
-    end
-```
-
-**XHTTP 的核心价值不是「过 CDN」**，而是这四点：
-
-| 优势 | 说明 |
-|---|---|
-| **可用 TLS 1.2** | Reality 只能用 TLS 1.3，某些地区已封锁 TLS 1.3 |
-| **上下行分离** | 发包和收包可走完全不同的路径（IPv4/IPv6、直连/CDN、不同国家） |
-| **流量混淆** | `packet-up`/`stream-up` 把数据拆成两条连接，天然规避 TLS-in-TLS |
-| **可过 CDN** | 藏在 CDN 后面，抬高封锁成本 |
-
-> 因为已有流量混淆机制，**XHTTP 不能也不需要配 `xtls-rprx-vision`**。
-
-## 选哪种
-
-| 场景 | 方案 | 需要域名 |
-|---|---|---|
-| 只想用比 Reality 更新的技术 | **方案 A：XHTTP + Reality** | ❌ |
-| IP 被封，需要借道 CDN | **方案 B：XHTTP + CDN** | ✅ |
-| 站点已占用 443，需要共存 | XHTTP + Nginx 前置 | ✅ |
-
-大多数情况**方案 A 就够了**——不需要买域名。
-
----
-
-## 方案 A：XHTTP + Reality（无需域名）
-
-这是官方示例 `VLESS-XHTTP-Reality` 的做法：靠 Reality 借用别人的站点完成 TLS，跟 VLESS+Reality 一样不需要自己的域名和证书。
-
-### 前置
-
-只需 VPS 和一个 Reality 目标站点（要求同 VLESS 章节）。
-
-### 配置
-
-`/usr/local/etc/xray/config.json`：
+靠 Reality 借用别人的站点完成 TLS，零域名零证书。
 
 ```jsonc
 {
@@ -339,11 +271,72 @@ flowchart LR
         "security": "reality",
         "realitySettings": {
           "show": false,
-          // 新版字段名为 target，旧版 dest
           "target": "{{REALITY_TARGET}}:443",
           "serverNames": ["{{REALITY_TARGET}}"],
           "privateKey": "{{REALITY_PRIVATE_KEY}}",
           "shortIds": ["{{REALITY_SHORT_ID}}"]
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls", "quic"]
+      }
+    }
+  ],
+  "outbounds": [{ "protocol": "freedom" }]
+}
+```
+
+### 方案 B：XHTTP + CDN（需要域名）
+
+**前置**：
+
+1. 一个域名，托管到 Cloudflare
+2. 建子域名（如 `{{CDN_DOMAIN}}`），**开启橙色云朵**
+3. Cloudflare 面板 → 网络 → 启用 **gRPC**
+
+**证书**：
+
+```bash
+# 方案一：acme.sh
+curl https://get.acme.sh | sh -s email={{EMAIL}}
+~/.acme.sh/acme.sh --issue -d {{CDN_DOMAIN}} --standalone
+
+# 方案二：Cloudflare Origin Certificate（更简单，仅 CF 回源有效）
+# CF 面板 → SSL/TLS → Origin Server → 创建证书
+```
+
+**配置**：
+
+```jsonc
+{
+  "log": { "loglevel": "warning" },
+  "inbounds": [
+    {
+      "tag": "xhttp-cdn",
+      "listen": "0.0.0.0",
+      "port": {{XHTTP_PORT}},
+      "protocol": "vless",
+      "settings": {
+        "clients": [{ "id": "{{UUID}}", "flow": "" }],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "tls",
+        "tlsSettings": {
+          "certificates": [
+            {
+              "certificateFile": "/etc/xray/certs/fullchain.pem",
+              "keyFile": "/etc/xray/certs/key.pem"
+            }
+          ],
+          "alpn": ["h2", "http/1.1"]
+        },
+        "xhttpSettings": {
+          "path": "/{{XHTTP_PATH}}",
+          // auto: h2 用 stream-up，h3 用 packet-up
+          "mode": "auto"
         }
       },
       "sniffing": {
@@ -363,144 +356,9 @@ systemctl restart xray
 systemctl is-active xray
 ss -tlnp | grep :443
 journalctl -u xray -n 30 --no-pager
-
-# 服务端自检：应返回目标站点真实证书
-openssl s_client -connect {{LOCALHOST}}:443 -servername {{REALITY_TARGET}} </dev/null 2>&1 \
-  | grep -E "subject=|Verify return code"
 ```
 
-### 客户端配置
-
-```yaml
-proxies:
-  - name: "XHTTP-DIRECT"
-    type: vless
-    server: {{VPS_IP}}
-    port: 443
-    uuid: {{UUID}}
-    network: xhttp
-    tls: true
-    udp: true
-    # XHTTP 不能用 Vision flow
-    flow: ""
-    servername: {{REALITY_TARGET}}
-    client-fingerprint: chrome
-    reality-opts:
-      public-key: {{REALITY_PUBLIC_KEY}}
-      short-id: {{REALITY_SHORT_ID}}
-    xhttp-opts:
-      path: "/{{XHTTP_PATH}}"
-      mode: auto
-```
-
----
-
-## 方案 B：XHTTP + CDN（需要域名）
-
-**仅在 IP 已被针对性封锁、必须借道 CDN 时使用。**
-
-### 前置：域名与 CDN
-
-1. 一个域名，托管到 Cloudflare
-2. 建子域名（如 `{{CDN_DOMAIN}}`），**开启橙色云朵**（代理模式）
-3. Cloudflare 面板 → 网络 → 启用 **gRPC**
-
-### 证书
-
-```bash
-# 方案一：acme.sh
-curl https://get.acme.sh | sh -s email={{EMAIL}}
-~/.acme.sh/acme.sh --issue -d {{CDN_DOMAIN}} --standalone
-
-# 方案二：Cloudflare Origin Certificate（更简单，仅 CF 回源有效）
-# CF 面板 → SSL/TLS → Origin Server → 创建证书
-```
-
-### 配置
-
-```jsonc
-{
-  "log": { "loglevel": "warning" },
-  "inbounds": [
-    {
-      "tag": "xhttp-cdn",
-      "listen": "0.0.0.0",
-      "port": {{XHTTP_PORT}},
-      "protocol": "vless",
-      "settings": {
-        "clients": [
-          {
-            "id": "{{UUID}}",
-            "flow": ""
-          }
-        ],
-        "decryption": "none"
-      },
-      "streamSettings": {
-        "network": "xhttp",
-        "security": "tls",
-        "tlsSettings": {
-          "certificates": [
-            {
-              "certificateFile": "/etc/xray/certs/fullchain.pem",
-              "keyFile": "/etc/xray/certs/key.pem"
-            }
-          ],
-          "alpn": ["h2", "http/1.1"]
-        },
-        "xhttpSettings": {
-          "path": "/{{XHTTP_PATH}}",
-          // auto: h2 用 stream-up，h3 用 packet-up
-          // 穿透失败时改 packet-up（兼容性最强）
-          "mode": "auto"
-        }
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": ["http", "tls", "quic"]
-      }
-    }
-  ],
-  "outbounds": [{ "protocol": "freedom" }]
-}
-```
-
-> 若与 VLESS 部署在同一 Xray，两个入站必须用不同端口（见「端口冲突说明」）。
-
-### 启动与自检
-
-```bash
-systemctl restart xray
-systemctl is-active xray
-ss -tlnp | grep {{XHTTP_PORT}}
-journalctl -u xray -n 30 --no-pager
-```
-
-### 客户端配置
-
-```yaml
-proxies:
-  - name: "XHTTP-CDN"
-    type: vless
-    server: {{CDN_DOMAIN}}
-    port: 443
-    uuid: {{UUID}}
-    network: xhttp
-    tls: true
-    udp: true
-    flow: ""
-    servername: {{CDN_DOMAIN}}
-    client-fingerprint: chrome
-    xhttp-opts:
-      path: "/{{XHTTP_PATH}}"
-      mode: auto
-      # CDN 转发所需的 HTTP Host
-      host: {{CDN_DOMAIN}}
-```
-
----
-
-## 三种模式
+### 三种模式
 
 | 模式 | 特点 | 适用 |
 |---|---|---|
@@ -509,34 +367,9 @@ proxies:
 | `stream-one` | 单连接双向 | Nginx `grpc_pass` 或 CF 开 gRPC |
 | `auto` | 按 ALPN 自动选择 | 默认推荐 |
 
-## 验证
+---
 
-```bash
-curl -s -o /dev/null -w "%{http_code}\n" --max-time 15 \
-  --socks5-hostname {{LOCALHOST}}:7897 https://www.gstatic.com/generate_204
-# 期望 204
-```
-
-## 常见坑
-
-| 问题 | 解决 |
-|---|---|
-| 连不上 CF | 面板启用 gRPC 支持 |
-| 无法穿透 Nginx | `proxy_pass` 改为 `grpc_pass` |
-| 长连接被掐断 | CF 会断下行 100 秒无数据的 HTTP，应用层需保活（如 sshd 设 `ClientAliveInterval`）|
-| 页面加载极慢 | 部分客户端 `auto` 不生效，手写 `h2 + stream-up` 或 `h3 + packet-up` |
-| 回源失败 | 确认 CF 的 SSL 模式为 Full 或 Full (strict) |
-| 版本不一致出怪问题 | **客户端与服务端 Xray 版本必须一致** |
-| 配了 `xtls-rprx-vision` | XHTTP 不支持 Vision flow，必须留空 |
-# 三、Hysteria2
-
-**QUIC 抢带宽，弱网最强。TCP 受限时走 UDP 绕开。**
-
-## 原理
-
-基于 QUIC（UDP），自带 Brutal 拥塞控制，在丢包严重时仍能跑满带宽。配 Salamander 混淆可干扰运营商的 QUIC 流量识别。
-
-## 服务端部署
+## 2.3 Hysteria2 服务端
 
 ### 安装
 
@@ -586,15 +419,13 @@ masquerade:
 
 ### 启动
 
-官方脚本会创建 systemd unit：
-
 ```bash
 systemctl enable --now hysteria-server
 systemctl is-active hysteria-server
 ss -ulnp | grep :{{HY2_PORT}}
 ```
 
-若无 unit（手动装的二进制），创建 `/etc/systemd/system/hysteria-server.service`：
+若无 systemd unit（手动装的二进制），创建 `/etc/systemd/system/hysteria-server.service`：
 
 ```ini
 [Unit]
@@ -620,7 +451,90 @@ useradd -r -s /sbin/nologin hysteria || true
 systemctl daemon-reload && systemctl enable --now hysteria-server
 ```
 
-## 客户端配置
+---
+
+# 三、客户端配置
+
+统一使用 **Clash Verge Rev**（mihomo 内核，纯 YAML 配置），三个协议均原生支持。
+
+## 配置文件位置
+
+```text
+Windows: %APPDATA%\io.github.clash-verge-rev.clash-verge-rev\profiles\
+macOS:   ~/Library/Application Support/io.github.clash-verge-rev.clash-verge-rev/profiles/
+Linux:   ~/.config/io.github.clash-verge-rev.clash-verge-rev/profiles/
+```
+
+## 3.1 VLESS 客户端
+
+```yaml
+proxies:
+  - name: "VLESS"
+    type: vless
+    server: {{VPS_IP}}
+    port: 443
+    uuid: {{UUID}}
+    network: tcp
+    tls: true
+    udp: true
+    # ★ 必须与服务端 flow 一致
+    flow: xtls-rprx-vision
+    servername: {{REALITY_TARGET}}
+    client-fingerprint: chrome
+    reality-opts:
+      public-key: {{REALITY_PUBLIC_KEY}}
+      short-id: {{REALITY_SHORT_ID}}
+```
+
+## 3.2 XHTTP 客户端
+
+**方案 A（直连）**：
+
+```yaml
+proxies:
+  - name: "XHTTP-DIRECT"
+    type: vless
+    server: {{VPS_IP}}
+    port: 443
+    uuid: {{UUID}}
+    network: xhttp
+    tls: true
+    udp: true
+    # XHTTP 不能用 Vision flow
+    flow: ""
+    servername: {{REALITY_TARGET}}
+    client-fingerprint: chrome
+    reality-opts:
+      public-key: {{REALITY_PUBLIC_KEY}}
+      short-id: {{REALITY_SHORT_ID}}
+    xhttp-opts:
+      path: "/{{XHTTP_PATH}}"
+      mode: auto
+```
+
+**方案 B（过 CDN）**：
+
+```yaml
+proxies:
+  - name: "XHTTP-CDN"
+    type: vless
+    server: {{CDN_DOMAIN}}
+    port: 443
+    uuid: {{UUID}}
+    network: xhttp
+    tls: true
+    udp: true
+    flow: ""
+    servername: {{CDN_DOMAIN}}
+    client-fingerprint: chrome
+    xhttp-opts:
+      path: "/{{XHTTP_PATH}}"
+      mode: auto
+      # CDN 转发所需的 HTTP Host
+      host: {{CDN_DOMAIN}}
+```
+
+## 3.3 Hysteria2 客户端
 
 ```yaml
 proxies:
@@ -641,18 +555,81 @@ proxies:
       - h3
 ```
 
-## 验证
+## 3.4 组合配置
+
+把上面三个节点放入同一个配置文件，配合分组与分流规则：
+
+```yaml
+proxy-groups:
+  - name: "🚀 节点选择"
+    type: select
+    proxies: ["VLESS", "XHTTP-DIRECT", "HY2", "♻️ 自动选择"]
+
+  - name: "♻️ 自动选择"
+    type: url-test
+    proxies: ["VLESS", "XHTTP-DIRECT", "HY2"]
+    url: "http://www.gstatic.com/generate_204"
+    interval: 300
+    tolerance: 50
+
+  - name: "🤖 AI 服务"
+    type: select
+    proxies: ["🚀 节点选择", "WARP"]
+
+rules:
+  # 局域网直连
+  - GEOIP,PRIVATE,DIRECT
+
+  # AI 服务走独立出口（避免机房 IP 风控）
+  - DOMAIN-SUFFIX,openai.com,🤖 AI 服务
+  - DOMAIN-SUFFIX,chatgpt.com,🤖 AI 服务
+  - DOMAIN-SUFFIX,anthropic.com,🤖 AI 服务
+  - DOMAIN-SUFFIX,claude.ai,🤖 AI 服务
+  - DOMAIN-SUFFIX,gemini.google.com,🤖 AI 服务
+
+  - MATCH,🚀 节点选择
+```
+
+完整示例见 [`examples/client-mihomo.yaml`](./examples/client-mihomo.yaml)。
+
+## 3.5 验证
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}\n" --max-time 15 \
   --socks5-hostname {{LOCALHOST}}:7897 https://www.gstatic.com/generate_204
+# 期望 204
 ```
+
+## 3.6 客户端自动化（可选）
+
+Clash Verge 支持 REST API。
+
+**前置**：设置 → 外部控制 → 开启，记下监听地址与密钥。
+
+```bash
+API="http://{{CLASH_API_HOST}}:9097"
+KEY="{{CLASH_API_KEY}}"
+
+# 查状态
+curl -H "Authorization: Bearer $KEY" "$API/version"
+curl -H "Authorization: Bearer $KEY" "$API/proxies"
+
+# 切节点（返回 204 表示成功）
+curl -X PUT -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+     -d '{"name":"节点名"}' "$API/proxies/分组名"
+
+# 测延迟
+curl -H "Authorization: Bearer $KEY" \
+     "$API/proxies/节点名/delay?timeout=5000&url=http%3A%2F%2Fwww.gstatic.com%2Fgenerate_204"
+```
+
+> 节点名含 emoji 或中文时必须 URL 编码。
 
 ---
 
-## 排障
+# 排障
 
-### 分层验证顺序
+## 分层验证顺序
 
 ```text
 1. 服务端进程活着        systemctl is-active
@@ -663,7 +640,7 @@ curl -s -o /dev/null -w "%{http_code}\n" --max-time 15 \
 6. 延迟合理              REST API 测速
 ```
 
-### ⚠️ 先确认本地没开 TUN
+## ⚠️ 先确认本地没开 TUN
 
 客户端开启 TUN 后接管全部流量，此时任何「直连测试」实际都走了代理，会得到 **1ms 延迟、1 跳直达**的假象。
 
@@ -680,7 +657,7 @@ ip route get {{VPS_IP}}
 
 若 `InterfaceAlias` 是 `singbox_tun` / `clash_tun` / `Mihomo`，**测试结果无效**。
 
-### 服务端抓包判读
+## 服务端抓包判读
 
 ```bash
 tcpdump -n -i any "host {{CLIENT_IP}} and tcp port 443" -c 20 -v
@@ -692,17 +669,18 @@ tcpdump -n -i any "host {{CLIENT_IP}} and tcp port 443" -c 20 -v
 | SYN 到达、无 SYN-ACK | 服务端未监听 / 本机防火墙 | 查 `ss -tlnp`、`iptables -L -n` |
 | SYN 到达、SYN-ACK 已发、客户端仍超时 | 回程阻断 | 换 IP 或走 CDN |
 
-### 高频问题
+## 高频问题
 
 | 症状 | 原因 | 处理 |
 |---|---|---|
-| `x509: certificate signed by unknown authority` | 自签证书，客户端未跳过校验 | mihomo 设 `skip-cert-verify: true` |
+| `x509: certificate signed by unknown authority` | 自签证书未跳过校验 | mihomo 设 `skip-cert-verify: true` |
 | 本机自连成功、外部全失败 | 进程未重启，配置漂移 | `systemctl restart xray` |
-| Xray 警告 `VLESS with no Flow is deprecated` | 裸 VLESS 已弃用 | 加 `flow: "xtls-rprx-vision"` |
+| 警告 `VLESS with no Flow is deprecated` | 裸 VLESS 已弃用 | 加 `flow: "xtls-rprx-vision"` |
+| XHTTP 报错或不工作 | 版本不一致 | 客户端与服务端 Xray 版本必须一致 |
 | 端口可达但协议不通 | 可能被 CDN/反代代答 | 必须做端到端验证 |
 | VLESS 换端口后更快被封 | 官方明确警告 | 坚持用 443 |
 
-### 配置不能跨内核复制
+## 配置不能跨内核复制
 
 | 功能 | Xray | mihomo |
 |---|---|---|
@@ -713,43 +691,15 @@ tcpdump -n -i any "host {{CLIENT_IP}} and tcp port 443" -c 20 -v
 
 ---
 
-## 客户端自动化（可选）
-
-Clash Verge 支持 REST API，便于脚本或 Agent 操作。
-
-**前置**：设置 → 外部控制 → 开启，记下监听地址与密钥。
-
-```bash
-API="http://{{CLASH_API_HOST}}:9097"
-KEY="{{CLASH_API_KEY}}"
-
-# 查状态
-curl -H "Authorization: Bearer $KEY" "$API/version"
-curl -H "Authorization: Bearer $KEY" "$API/proxies"
-curl -H "Authorization: Bearer $KEY" "$API/rules"
-
-# 切节点（返回 204 表示成功）
-curl -X PUT -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-     -d '{"name":"节点名"}' "$API/proxies/分组名"
-
-# 测延迟
-curl -H "Authorization: Bearer $KEY" \
-     "$API/proxies/节点名/delay?timeout=5000&url=http%3A%2F%2Fwww.gstatic.com%2Fgenerate_204"
-```
-
-> 节点名含 emoji 或中文时必须 URL 编码。
-
----
-
-## 反模式清单
+# 反模式清单
 
 | ❌ 不要这样做 | 为什么 |
 |---|---|
-| 先用密码登录，之后再改密钥 | 密码认证暴露在公网会被持续爆破 |
+| 先用密码登录，之后再改密钥 | 公网暴露会被持续爆破 |
 | 改防火墙前不确认 SSH 端口 | 可能直接锁死自己 |
 | **裸 VLESS 不配 Flow** | 已弃用，抗检测能力差 |
-| VLESS+REALITY 跑在非 443 端口 | 官方警告会加速 IP 被封 |
-| XHTTP 配 `xtls-rprx-vision` | XHTTP 不支持 Vision flow |
+| **XHTTP 配 `xtls-rprx-vision`** | XHTTP 不支持 Vision flow |
+| VLESS+Reality 跑在非 443 端口 | 官方警告会加速 IP 被封 |
 | VLESS 和 XHTTP 同时占用 443 | 同一进程端口冲突 |
 | 跨内核复制配置 | 字段名不同，会静默失败 |
 | 假设 TCP 端口通 = 服务可用 | 裸连通过不代表协议层能跑 |
@@ -757,7 +707,7 @@ curl -H "Authorization: Bearer $KEY" \
 
 ---
 
-## 版本与安全
+# 版本与安全
 
 **最后核对：2026-11-01** ｜ 详见 [`VERSIONS.md`](./VERSIONS.md)
 
@@ -768,13 +718,13 @@ curl -H "Authorization: Bearer $KEY" \
 | mihomo | v1.19.33 | 2026-10-21 |
 | Clash Verge Rev | v2.5.8 | 2026-10-09 |
 
-### ⚠️ 安全公告
+## ⚠️ 安全公告
 
 **Xray v26.10.31 是紧急安全更新**：Linux 内核被爆出监听 IPv4 MPTCP 极易被远程利用获取 root 权限，而 Go 1.24+ 默认开启 MPTCP。该版本默认关闭 MPTCP 以减小攻击面。
 
 **建议**：尽快升级 Xray 至 v26.10.31+，并同步更新 Linux 内核。
 
-### 破坏性变更
+## 破坏性变更
 
 | 组件 | 变更 | 替代 |
 |---|---|---|
@@ -785,7 +735,7 @@ curl -H "Authorization: Bearer $KEY" \
 
 ---
 
-## 参考资料
+# 参考资料
 
 - Xray-core — <https://github.com/XTLS/Xray-core>
 - REALITY 文档 — <https://xtls.github.io/config/transports/reality.html>
