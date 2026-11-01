@@ -14,24 +14,25 @@
 ```mermaid
 flowchart TB
     A[你的网络环境] --> B{TCP 443 直连可用?}
-    B -->|可用| C["VLESS + REALITY<br/>伪装性强，性能好"]
+    B -->|可用| C["VLESS + REALITY<br/>或 XHTTP + REALITY<br/>均无需域名"]
     B -->|被封锁| D{TCP 整体可用?}
-    D -->|可用| E["XHTTP + CDN<br/>藏在 CDN 后面"]
+    D -->|可用| E["XHTTP + CDN<br/>需要域名"]
     D -->|否| F["Hysteria2<br/>走 UDP 绕开"]
 ```
 
-| 协议 | 传输 | 需要域名 | 需要证书 | 一句话 |
-|---|---|---|---|---|
-| **VLESS** | TCP 443 | ❌ | ❌ | 伪装成真实网站，直连首选 |
-| **XHTTP** | TCP，可过 CDN | ✅ 过 CDN 时 | ✅ 过 CDN 时 | 藏在 CDN 后面，抗 IP 封锁 |
-| **Hysteria2** | UDP 443 | ❌ | 自签可用 | QUIC 抢带宽，弱网最强 |
+| 协议 | 传输 | 需要域名 | 一句话 |
+|---|---|---|---|
+| **VLESS** | TCP 443 | ❌ | 伪装成真实网站，最成熟稳定 |
+| **XHTTP** | TCP，可过 CDN | **直连 ❌ / 过 CDN ✅** | 可用 TLS1.2、上下行分离、可过 CDN |
+| **Hysteria2** | UDP 443 | ❌ | QUIC 抢带宽，弱网最强 |
 
 **三者关系**：不是替代，是互补。
 
-- **VLESS** 解决「直连时如何不被识别」
-- **XHTTP** 解决「不能直连时如何借道 CDN」
+- **VLESS** 解决「直连时如何不被识别」，最成熟稳定
+- **XHTTP** 既可直连（配 Reality，无需域名），也可过 CDN（需域名），另有上下行分离等进阶能力
 - **Hysteria2** 解决「TCP 受限时如何走 UDP」
 
+> ⚠️ **XHTTP 不必然需要域名**。只有「过 CDN」或「自有 TLS 证书」时才需要。直连场景用 `XHTTP + Reality` 即可，与 VLESS+Reality 一样零域名零证书。
 可以同时部署，客户端按需切换。
 
 ---
@@ -255,40 +256,154 @@ curl -s -o /dev/null -w "%{http_code}\n" --max-time 15 \
 
 ---
 
+
 # 二、XHTTP
 
-**藏在 CDN 后面，抗 IP 级封锁。需要域名。**
+**VLESS 之上的传输层。两种用法：直连（无需域名）或过 CDN（需域名）。**
 
 ## 原理
 
-XHTTP 是**传输层**（不是协议），配合 VLESS 使用。
+XHTTP 是**传输层**，不是独立协议，配合 VLESS 使用。
 
 ```mermaid
 flowchart LR
-    C[客户端] -->|"HTTPS 到 CDN 域名"| CDN["Cloudflare 等 CDN"]
-    CDN -->|"回源"| S["你的 VPS"]
+    subgraph A["方案A：直连"]
+        C1[客户端] -->|"xhttp + reality"| S1["VPS:443"]
+    end
+    subgraph B["方案B：过 CDN"]
+        C2[客户端] -->|"HTTPS"| CDN["Cloudflare"]
+        CDN -->|"回源"| S2["VPS"]
+    end
 ```
 
-审查者看到的是「访问一个普通 Cloudflare 网站」。封锁它意味着误伤大量正常网站，成本极高。
+**XHTTP 的核心价值不是「过 CDN」**，而是这四点：
 
-**核心价值是过 CDN**，不是取代 VLESS+REALITY。如果 IP 没被封，用 VLESS 更简单。
+| 优势 | 说明 |
+|---|---|
+| **可用 TLS 1.2** | Reality 只能用 TLS 1.3，某些地区已封锁 TLS 1.3 |
+| **上下行分离** | 发包和收包可走完全不同的路径（IPv4/IPv6、直连/CDN、不同国家） |
+| **流量混淆** | `packet-up`/`stream-up` 把数据拆成两条连接，天然规避 TLS-in-TLS |
+| **可过 CDN** | 藏在 CDN 后面，抬高封锁成本 |
 
-## 三种模式
+> 因为已有流量混淆机制，**XHTTP 不能也不需要配 `xtls-rprx-vision`**。
 
-| 模式 | 特点 | 适用 |
+## 选哪种
+
+| 场景 | 方案 | 需要域名 |
 |---|---|---|
-| `packet-up` | 最慢但兼容性最强 | 无法穿透 CDN/反代时的保底 |
-| `stream-up` | 较快，需特定服务端配置 | 常规 CDN |
-| `stream-one` | 单连接双向 | Nginx `grpc_pass` 或 CF 开 gRPC |
-| `auto` | 按 ALPN 自动选择 | 默认推荐 |
+| 只想用比 Reality 更新的技术 | **方案 A：XHTTP + Reality** | ❌ |
+| IP 被封，需要借道 CDN | **方案 B：XHTTP + CDN** | ✅ |
+| 站点已占用 443，需要共存 | XHTTP + Nginx 前置 | ✅ |
 
-## 前置：域名与 CDN
+大多数情况**方案 A 就够了**——不需要买域名。
 
-1. 准备一个域名，托管到 Cloudflare
+---
+
+## 方案 A：XHTTP + Reality（无需域名）
+
+这是官方示例 `VLESS-XHTTP-Reality` 的做法：靠 Reality 借用别人的站点完成 TLS，跟 VLESS+Reality 一样不需要自己的域名和证书。
+
+### 前置
+
+只需 VPS 和一个 Reality 目标站点（要求同 VLESS 章节）。
+
+### 配置
+
+`/usr/local/etc/xray/config.json`：
+
+```jsonc
+{
+  "log": { "loglevel": "warning" },
+  "inbounds": [
+    {
+      "tag": "xhttp",
+      "listen": "0.0.0.0",
+      "port": 443,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "{{UUID}}",
+            // XHTTP 不能用 Vision flow，必须留空
+            "flow": ""
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "xhttpSettings": {
+          "path": "/{{XHTTP_PATH}}"
+        },
+        // 用 Reality 完成 TLS，不需要自己的证书
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          // 新版字段名为 target，旧版 dest
+          "target": "{{REALITY_TARGET}}:443",
+          "serverNames": ["{{REALITY_TARGET}}"],
+          "privateKey": "{{REALITY_PRIVATE_KEY}}",
+          "shortIds": ["{{REALITY_SHORT_ID}}"]
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls", "quic"]
+      }
+    }
+  ],
+  "outbounds": [{ "protocol": "freedom" }]
+}
+```
+
+### 启动与自检
+
+```bash
+systemctl restart xray
+systemctl is-active xray
+ss -tlnp | grep :443
+journalctl -u xray -n 30 --no-pager
+
+# 服务端自检：应返回目标站点真实证书
+openssl s_client -connect {{LOCALHOST}}:443 -servername {{REALITY_TARGET}} </dev/null 2>&1 \
+  | grep -E "subject=|Verify return code"
+```
+
+### 客户端配置
+
+```yaml
+proxies:
+  - name: "XHTTP-DIRECT"
+    type: vless
+    server: {{VPS_IP}}
+    port: 443
+    uuid: {{UUID}}
+    network: xhttp
+    tls: true
+    udp: true
+    # XHTTP 不能用 Vision flow
+    flow: ""
+    servername: {{REALITY_TARGET}}
+    client-fingerprint: chrome
+    reality-opts:
+      public-key: {{REALITY_PUBLIC_KEY}}
+      short-id: {{REALITY_SHORT_ID}}
+    xhttp-opts:
+      path: "/{{XHTTP_PATH}}"
+      mode: auto
+```
+
+---
+
+## 方案 B：XHTTP + CDN（需要域名）
+
+**仅在 IP 已被针对性封锁、必须借道 CDN 时使用。**
+
+### 前置：域名与 CDN
+
+1. 一个域名，托管到 Cloudflare
 2. 建子域名（如 `{{CDN_DOMAIN}}`），**开启橙色云朵**（代理模式）
 3. Cloudflare 面板 → 网络 → 启用 **gRPC**
-
-## 服务端部署
 
 ### 证书
 
@@ -303,14 +418,12 @@ curl https://get.acme.sh | sh -s email={{EMAIL}}
 
 ### 配置
 
-`/usr/local/etc/xray/config.json`：
-
 ```jsonc
 {
   "log": { "loglevel": "warning" },
   "inbounds": [
     {
-      "tag": "xhttp",
+      "tag": "xhttp-cdn",
       "listen": "0.0.0.0",
       "port": {{XHTTP_PORT}},
       "protocol": "vless",
@@ -318,7 +431,6 @@ curl https://get.acme.sh | sh -s email={{EMAIL}}
         "clients": [
           {
             "id": "{{UUID}}",
-            // XHTTP 不能用 Vision flow，必须留空
             "flow": ""
           }
         ],
@@ -339,7 +451,7 @@ curl https://get.acme.sh | sh -s email={{EMAIL}}
         "xhttpSettings": {
           "path": "/{{XHTTP_PATH}}",
           // auto: h2 用 stream-up，h3 用 packet-up
-          // 穿透失败时改 packet-up
+          // 穿透失败时改 packet-up（兼容性最强）
           "mode": "auto"
         }
       },
@@ -355,7 +467,7 @@ curl https://get.acme.sh | sh -s email={{EMAIL}}
 
 > 若与 VLESS 部署在同一 Xray，两个入站必须用不同端口（见「端口冲突说明」）。
 
-### 启动
+### 启动与自检
 
 ```bash
 systemctl restart xray
@@ -364,11 +476,11 @@ ss -tlnp | grep {{XHTTP_PORT}}
 journalctl -u xray -n 30 --no-pager
 ```
 
-## 客户端配置
+### 客户端配置
 
 ```yaml
 proxies:
-  - name: "XHTTP"
+  - name: "XHTTP-CDN"
     type: vless
     server: {{CDN_DOMAIN}}
     port: 443
@@ -376,7 +488,6 @@ proxies:
     network: xhttp
     tls: true
     udp: true
-    # XHTTP 不能用 Vision flow
     flow: ""
     servername: {{CDN_DOMAIN}}
     client-fingerprint: chrome
@@ -387,11 +498,23 @@ proxies:
       host: {{CDN_DOMAIN}}
 ```
 
+---
+
+## 三种模式
+
+| 模式 | 特点 | 适用 |
+|---|---|---|
+| `packet-up` | 最慢但兼容性最强 | 无法穿透 CDN/反代时的保底 |
+| `stream-up` | 较快，需特定服务端配置 | 常规 CDN |
+| `stream-one` | 单连接双向 | Nginx `grpc_pass` 或 CF 开 gRPC |
+| `auto` | 按 ALPN 自动选择 | 默认推荐 |
+
 ## 验证
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}\n" --max-time 15 \
   --socks5-hostname {{LOCALHOST}}:7897 https://www.gstatic.com/generate_204
+# 期望 204
 ```
 
 ## 常见坑
@@ -403,9 +526,8 @@ curl -s -o /dev/null -w "%{http_code}\n" --max-time 15 \
 | 长连接被掐断 | CF 会断下行 100 秒无数据的 HTTP，应用层需保活（如 sshd 设 `ClientAliveInterval`）|
 | 页面加载极慢 | 部分客户端 `auto` 不生效，手写 `h2 + stream-up` 或 `h3 + packet-up` |
 | 回源失败 | 确认 CF 的 SSL 模式为 Full 或 Full (strict) |
-
----
-
+| 版本不一致出怪问题 | **客户端与服务端 Xray 版本必须一致** |
+| 配了 `xtls-rprx-vision` | XHTTP 不支持 Vision flow，必须留空 |
 # 三、Hysteria2
 
 **QUIC 抢带宽，弱网最强。TCP 受限时走 UDP 绕开。**
