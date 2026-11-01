@@ -1,0 +1,147 @@
+// Xray 服务端示例配置
+//
+// 说明：
+//   - 两个入站不能同时占用 443，二选一或改端口
+//   - REALITY 不要跑在非 443 端口（官方警告会加速 IP 被封）
+//   - REALITY 私钥用 `xray x25519` 生成，私钥留在服务端
+//
+// 用法：复制到 /usr/local/etc/xray/config.json 并替换 {{PLACEHOLDER}}
+
+{
+  "log": {
+    "loglevel": "warning"
+  },
+
+  "inbounds": [
+    // ── 入口一：VLESS + XHTTP（TCP，可套 CDN）────────────────
+    {
+      "tag": "xhttp",
+      "listen": "0.0.0.0",
+      "port": {{XHTTP_PORT}},
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "{{UUID}}",
+            "flow": ""
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        // 直连用 none；套 CDN 时改 tls 并配置证书
+        "security": "none",
+        "xhttpSettings": {
+          "path": "{{XHTTP_PATH}}",
+          // 兼容性最强，无法穿透 CDN/反代时的选择
+          "mode": "auto"
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls", "quic"],
+        "metadataOnly": false
+      }
+    },
+
+    // ── 入口二：VLESS + REALITY（TCP，伪装真实站点）──────────
+    {
+      "tag": "reality",
+      "listen": "0.0.0.0",
+      "port": 443,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "{{UUID}}",
+            "flow": "xtls-rprx-vision"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        // 旧版写 "tcp"，新版称 "raw"，二者兼容
+        "network": "raw",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          // 新版字段名为 target，旧版为 dest，二者兼容
+          "dest": "{{REALITY_TARGET}}:443",
+          "serverNames": ["{{REALITY_TARGET}}"],
+          "privateKey": "{{REALITY_PRIVATE_KEY}}",
+          "shortIds": ["{{REALITY_SHORT_ID}}"]
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls", "quic"],
+        "metadataOnly": false
+      }
+    }
+  ],
+
+  "outbounds": [
+    {
+      "tag": "direct",
+      "protocol": "freedom",
+      "settings": {}
+    },
+
+    // ── 可选：Cloudflare WARP 出口（需 warp-svc 监听 40000）──
+    {
+      "tag": "warp",
+      "protocol": "socks",
+      "settings": {
+        "address": "127.0.0.1",
+        "port": 40000
+      }
+    },
+
+    {
+      "tag": "block",
+      "protocol": "blackhole",
+      "settings": {}
+    }
+  ],
+
+  "routing": {
+    "domainStrategy": "IPOnDemand",
+    "rules": [
+      // 阻止代理客户端访问私网 / 链路本地地址
+      {
+        "type": "field",
+        "inboundTag": ["xhttp", "reality"],
+        "ip": [
+          "10.0.0.0/8",
+          "172.16.0.0/12",
+          "192.168.0.0/16",
+          "127.0.0.0/8",
+          "169.254.0.0/16",
+          "fc00::/7",
+          "fe80::/10"
+        ],
+        "outboundTag": "block"
+      },
+
+      // 可选：AI 服务走 WARP 出口。不需要则删除本条和 warp 出站
+      {
+        "type": "field",
+        "inboundTag": ["xhttp", "reality"],
+        "domain": [
+          "domain:openai.com",
+          "domain:chatgpt.com",
+          "domain:oaistatic.com",
+          "domain:oaiusercontent.com",
+          "domain:anthropic.com",
+          "domain:claude.ai",
+          "domain:gemini.google.com",
+          "domain:aistudio.google.com",
+          "domain:generativelanguage.googleapis.com"
+        ],
+        "network": "tcp,udp",
+        "outboundTag": "warp"
+      }
+    ]
+  }
+}

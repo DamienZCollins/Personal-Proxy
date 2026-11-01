@@ -1,0 +1,19 @@
+# 本地真实配置，绝不提交
+local/
+*.local.yaml
+*.local.json
+
+# 生成的产物
+out/
+
+# 密钥与证书
+*.pem
+*.key
+*.crt
+secrets.*
+
+# 编辑器与系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

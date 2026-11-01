@@ -1,0 +1,117 @@
+# mihomo 客户端示例
+#
+# 用法：
+#   1. 复制本文件到 Clash Verge 的 profiles 目录
+#   2. 替换所有 {{PLACEHOLDER}}
+#   3. 在 GUI 中选择该配置
+#
+# 自签证书说明：
+#   Hysteria2 用自签证书时，必须设 skip-cert-verify: true
+#   否则报 x509: certificate signed by unknown authority
+
+mixed-port: 7897
+allow-lan: false
+mode: rule
+log-level: info
+ipv6: true
+unified-delay: true
+
+proxies:
+  # ── 主入口：Hysteria2（UDP 443）────────────────────────────
+  - name: "HY2"
+    type: hysteria2
+    server: {{VPS_IP}}
+    port: {{HY2_PORT}}
+    password: {{HY2_PASSWORD}}
+    # 自签证书时必须为 true
+    skip-cert-verify: true
+    sni: {{SERVER_NAME}}
+    # 带宽设置，按 VPS 实际带宽填写
+    up: "{{UP_MBPS}}"
+    down: "{{DOWN_MBPS}}"
+    obfs: salamander
+    obfs-password: {{HY2_OBFS_PASSWORD}}
+    alpn:
+      - h3
+
+  # ── TCP 备线：VLESS + XHTTP ────────────────────────────────
+  - name: "XHTTP"
+    type: vless
+    server: {{VPS_IP}}
+    port: {{XHTTP_PORT}}
+    uuid: {{UUID}}
+    network: xhttp
+    # 直连时无 TLS；套 CDN 时改 true 并填 servername
+    tls: false
+    skip-cert-verify: true
+    xhttp-opts:
+      path: "{{XHTTP_PATH}}"
+
+  # ── 备用：VLESS + REALITY ──────────────────────────────────
+  - name: "REALITY"
+    type: vless
+    server: {{VPS_IP}}
+    port: {{REALITY_PORT}}
+    uuid: {{UUID}}
+    network: tcp
+    tls: true
+    udp: true
+    flow: xtls-rprx-vision
+    servername: {{REALITY_TARGET}}
+    client-fingerprint: chrome
+    reality-opts:
+      public-key: {{REALITY_PUBLIC_KEY}}
+      short-id: {{REALITY_SHORT_ID}}
+
+  # ── WARP 出口（可选，用于 AI 流量）────────────────────────
+  - name: "WARP"
+    type: socks5
+    server: 127.0.0.1
+    port: 40000
+    udp: true
+
+proxy-groups:
+  - name: "🚀 节点选择"
+    type: select
+    proxies:
+      - "HY2"
+      - "XHTTP"
+      - "REALITY"
+      - "♻️ 自动选择"
+
+  - name: "♻️ 自动选择"
+    type: url-test
+    proxies:
+      - "HY2"
+      - "XHTTP"
+      - "REALITY"
+    url: "http://www.gstatic.com/generate_204"
+    interval: 300
+    tolerance: 50
+
+  - name: "🤖 AI 服务"
+    type: select
+    proxies:
+      - "🚀 节点选择"
+      - "WARP"
+
+rules:
+  # AI 服务优先走 WARP（避免机房 IP 风控）
+  - DOMAIN-SUFFIX,openai.com,🤖 AI 服务
+  - DOMAIN-SUFFIX,chatgpt.com,🤖 AI 服务
+  - DOMAIN-SUFFIX,oaistatic.com,🤖 AI 服务
+  - DOMAIN-SUFFIX,oaiusercontent.com,🤖 AI 服务
+  - DOMAIN-SUFFIX,anthropic.com,🤖 AI 服务
+  - DOMAIN-SUFFIX,claude.ai,🤖 AI 服务
+  - DOMAIN-SUFFIX,gemini.google.com,🤖 AI 服务
+  - DOMAIN-SUFFIX,aistudio.google.com,🤖 AI 服务
+  - DOMAIN-SUFFIX,generativelanguage.googleapis.com,🤖 AI 服务
+
+  # 私有网络直连
+  - GEOIP,PRIVATE,DIRECT
+  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
+  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
+
+  # 其余走代理
+  - MATCH,🚀 节点选择
