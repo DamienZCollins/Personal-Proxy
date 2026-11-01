@@ -94,7 +94,7 @@ proxies:
   # ── 可选：WARP 出口（AI 流量用）────────────────────────────
   - name: "WARP"
     type: socks5
-    server: 127.0.0.1
+    server: {{LOCALHOST}}
     port: 40000
     udp: true
 

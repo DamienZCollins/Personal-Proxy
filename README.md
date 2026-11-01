@@ -389,7 +389,7 @@ ss -tlnp | grep :443
 journalctl -u xray -n 30 --no-pager
 
 # 服务端本机自连，应返回真实站点证书
-openssl s_client -connect 127.0.0.1:443 -servername {{REALITY_TARGET}} </dev/null 2>&1 \
+openssl s_client -connect {{LOCALHOST}}:443 -servername {{REALITY_TARGET}} </dev/null 2>&1 \
   | grep -E "subject=|Verify return code"
 ```
 
@@ -578,7 +578,7 @@ WARP 出口配置见 [`examples/warp-outbound.md`](./examples/warp-outbound.md)�
 ```text
 1. 服务端进程活着        systemctl is-active
 2. 端口在监听            ss -tulnp
-3. 服务端本机自连可用    openssl s_client 连 127.0.0.1
+3. 服务端本机自连可用    openssl s_client 连 {{LOCALHOST}}
 4. 客户端能连上服务端    tcpdump 看 SYN/SYN-ACK
 5. 客户端能出网          curl --socks5 访问外部
 6. 延迟合理              REST API 测速

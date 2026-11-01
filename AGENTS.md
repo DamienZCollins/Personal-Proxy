@@ -137,7 +137,7 @@ local/                    # 已在 .gitignore，绝不提交
 ```bash
 grep -rEn '([0-9]{1,3}\.){3}[0-9]{1,3}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|PRIVATE KEY' \
   --include='*.md' --include='*.yaml' --include='*.json' --include='*.jsonc' . \
-  | grep -v '{{' | grep -v '0.0.0.0' | grep -v '127.0.0.1' \
+  | grep -v '{{' | grep -v '0.0.0.0' | grep -v '{{LOCALHOST}}' \
   | grep -v '127\.0\.0\.0' | grep -v '192\.168' | grep -v '10\.0\.0\.0' | grep -v '172\.16'
 ```
 

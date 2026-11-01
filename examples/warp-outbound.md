@@ -44,7 +44,7 @@ warp-cli connect
 验证：
 
 ```bash
-curl -x socks5://127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace
+curl -x socks5://{{LOCALHOST}}:40000 https://www.cloudflare.com/cdn-cgi/trace
 # 输出应包含 warp=on
 ```
 
@@ -59,7 +59,7 @@ curl -x socks5://127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace
   "tag": "warp",
   "protocol": "socks",
   "settings": {
-    "address": "127.0.0.1",
+    "address": "{{LOCALHOST}}",
     "port": 40000
   }
 }
@@ -96,7 +96,7 @@ curl -x socks5://127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace
 proxies:
   - name: WARP
     type: socks5
-    server: 127.0.0.1
+    server: {{LOCALHOST}}
     port: 40000
     udp: true
 
@@ -111,7 +111,7 @@ rules:
 ## 验证清单
 
 - [ ] `warp-cli status` 显示 `Connected`
-- [ ] `curl -x socks5://127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace` 输出 `warp=on`
+- [ ] `curl -x socks5://{{LOCALHOST}}:40000 https://www.cloudflare.com/cdn-cgi/trace` 输出 `warp=on`
 - [ ] 访问 AI 服务时出口 IP 与 VPS 原生 IP 不同
 - [ ] 非 AI 流量仍走直连，未被 WARP 接管
 
