@@ -1,12 +1,12 @@
 # mihomo 客户端示例
 #
 # 用法：
-#   1. 复制本文件到 Clash Verge 的 profiles 目录
+#   1. 复制到 Clash Verge 的 profiles 目录
 #   2. 替换所有 {{PLACEHOLDER}}
 #   3. 在 GUI 中选择该配置
 #
-# 自签证书说明：
-#   Hysteria2 用自签证书时，必须设 skip-cert-verify: true
+# 自签证书：
+#   Hysteria2 用自签证书时必须设 skip-cert-verify: true
 #   否则报 x509: certificate signed by unknown authority
 
 mixed-port: 7897
@@ -17,7 +17,26 @@ ipv6: true
 unified-delay: true
 
 proxies:
-  # ── 主入口：Hysteria2（UDP 443）────────────────────────────
+  # ── 主入口：VLESS + REALITY + Vision（TCP 443）──────────────
+  # 无需域名、无需证书，伪装性最好
+  - name: "REALITY"
+    type: vless
+    server: {{VPS_IP}}
+    port: 443
+    uuid: {{UUID}}
+    network: tcp
+    tls: true
+    udp: true
+    # ★ 必须与服务端一致，裸 VLESS 已弃用
+    flow: xtls-rprx-vision
+    servername: {{REALITY_TARGET}}
+    client-fingerprint: chrome
+    reality-opts:
+      public-key: {{REALITY_PUBLIC_KEY}}
+      short-id: {{REALITY_SHORT_ID}}
+
+  # ── 备线：Hysteria2（UDP 443）──────────────────────────────
+  # 弱网性能最好，UDP 通畅时优先
   - name: "HY2"
     type: hysteria2
     server: {{VPS_IP}}
@@ -26,7 +45,7 @@ proxies:
     # 自签证书时必须为 true
     skip-cert-verify: true
     sni: {{SERVER_NAME}}
-    # 带宽设置，按 VPS 实际带宽填写
+    # 按 VPS 实际带宽填写
     up: "{{UP_MBPS}}"
     down: "{{DOWN_MBPS}}"
     obfs: salamander
@@ -34,36 +53,45 @@ proxies:
     alpn:
       - h3
 
-  # ── TCP 备线：VLESS + XHTTP ────────────────────────────────
+  # ── 可选：VLESS + XHTTP（过 CDN）───────────────────────────
+  # 仅在 IP 被封、需要借道 CDN 时使用
   - name: "XHTTP"
     type: vless
-    server: {{VPS_IP}}
-    port: {{XHTTP_PORT}}
+    server: {{CDN_DOMAIN}}
+    port: 443
     uuid: {{UUID}}
     network: xhttp
-    # 直连时无 TLS；套 CDN 时改 true 并填 servername
-    tls: false
-    skip-cert-verify: true
+    tls: true
+    udp: true
+    # XHTTP 不能用 Vision flow，留空
+    flow: ""
+    servername: {{CDN_DOMAIN}}
+    client-fingerprint: chrome
+    skip-cert-verify: false
     xhttp-opts:
-      path: "{{XHTTP_PATH}}"
+      path: "/{{XHTTP_PATH}}"
+      # auto / packet-up / stream-up / stream-one
+      mode: auto
+      # CDN 转发所需的 HTTP Host
+      host: {{CDN_DOMAIN}}
 
-  # ── 备用：VLESS + REALITY ──────────────────────────────────
-  - name: "REALITY"
+  # ── 可选：第二个 REALITY 目标，提高可用性 ──────────────────
+  - name: "REALITY-2"
     type: vless
     server: {{VPS_IP}}
-    port: {{REALITY_PORT}}
+    port: 443
     uuid: {{UUID}}
     network: tcp
     tls: true
     udp: true
     flow: xtls-rprx-vision
-    servername: {{REALITY_TARGET}}
+    servername: {{REALITY_TARGET_2}}
     client-fingerprint: chrome
     reality-opts:
       public-key: {{REALITY_PUBLIC_KEY}}
       short-id: {{REALITY_SHORT_ID}}
 
-  # ── WARP 出口（可选，用于 AI 流量）────────────────────────
+  # ── 可选：WARP 出口（AI 流量用）────────────────────────────
   - name: "WARP"
     type: socks5
     server: 127.0.0.1
@@ -74,17 +102,18 @@ proxy-groups:
   - name: "🚀 节点选择"
     type: select
     proxies:
+      - "REALITY"
+      - "REALITY-2"
       - "HY2"
       - "XHTTP"
-      - "REALITY"
       - "♻️ 自动选择"
 
   - name: "♻️ 自动选择"
     type: url-test
     proxies:
-      - "HY2"
-      - "XHTTP"
       - "REALITY"
+      - "REALITY-2"
+      - "HY2"
     url: "http://www.gstatic.com/generate_204"
     interval: 300
     tolerance: 50
@@ -96,7 +125,13 @@ proxy-groups:
       - "WARP"
 
 rules:
-  # AI 服务优先走 WARP（避免机房 IP 风控）
+  # 局域网直连
+  - GEOIP,PRIVATE,DIRECT
+  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
+  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
+
+  # AI 服务走独立出口（避免机房 IP 风控）
   - DOMAIN-SUFFIX,openai.com,🤖 AI 服务
   - DOMAIN-SUFFIX,chatgpt.com,🤖 AI 服务
   - DOMAIN-SUFFIX,oaistatic.com,🤖 AI 服务
@@ -106,12 +141,6 @@ rules:
   - DOMAIN-SUFFIX,gemini.google.com,🤖 AI 服务
   - DOMAIN-SUFFIX,aistudio.google.com,🤖 AI 服务
   - DOMAIN-SUFFIX,generativelanguage.googleapis.com,🤖 AI 服务
-
-  # 私有网络直连
-  - GEOIP,PRIVATE,DIRECT
-  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
-  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
-  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
 
   # 其余走代理
   - MATCH,🚀 节点选择

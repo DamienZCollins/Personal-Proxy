@@ -1,30 +1,18 @@
-# WARP 出口
+# WARP 出口（可选）
 
-把指定流量（主要是 AI 服务）从 Cloudflare WARP 出去，与 VPS 原生 IP 解耦。
+把 AI 相关流量从 Cloudflare WARP 出去，与 VPS 原生 IP 解耦。
 
-## 为什么需要
-
-AI / SaaS 服务常受**地区可用性、机房 IP 信誉、出口变化**影响。让 AI 流量走 WARP，可以：
-
-- 避免 VPS 机房 IP 被判定为风险账号
-- 在 VPS 原生 IP 被服务拉黑时仍可用
-- 不接管整台 VPS 的流量
-
-**这解决的是「VPS 从哪里出去」，不是「怎么进入 VPS」。** 入口用 REALITY / XHTTP，出口用 WARP，两者独立。
+**这解决的是「VPS 从哪里出去」，不是「怎么进入 VPS」。** 入口用 REALITY / Hysteria2，出口用 WARP，两者独立。
 
 ---
 
-## 架构
+## 为什么需要
 
-```mermaid
-flowchart LR
-    C[客户端] --> E[代理入口<br/>Hysteria2 / XHTTP]
-    E --> V[VPS]
-    V -->|AI 域名| W[WARP<br/>127.0.0.1:40000]
-    V -->|其他| D[直连出口]
-    W --> I[Internet]
-    D --> I
-```
+AI / SaaS 服务常受地区可用性、机房 IP 信誉、出口变化影响。让 AI 流量走 WARP 可以：
+
+- 避免 VPS 机房 IP 被判定为风险账号
+- 在 VPS 原生 IP 被服务方拉黑时仍可用
+- 不接管整台 VPS 的流量
 
 ---
 
@@ -44,7 +32,7 @@ apt update && apt install -y cloudflare-warp
 
 ## 以代理模式运行
 
-WARP 支持两种模式，**这里需要代理模式**（监听本地端口），而不是全局模式。
+需要**代理模式**（监听本地端口），而不是全局模式。
 
 ```bash
 warp-cli registration new
@@ -82,7 +70,7 @@ curl -x socks5://127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace
 ```jsonc
 {
   "type": "field",
-  "inboundTag": ["xhttp", "reality", "hy2"],
+  "inboundTag": ["reality"],
   "domain": [
     "domain:openai.com",
     "domain:chatgpt.com",
@@ -98,7 +86,7 @@ curl -x socks5://127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace
 }
 ```
 
-**注意**：除了 `direct` 与 `block`，其他出站都要显式加路由规则，否则不会生效。
+**注意**：除 `direct` 与 `block` 外，其他出站都要显式加路由规则才会生效。
 
 ---
 
@@ -125,7 +113,7 @@ rules:
 - [ ] `warp-cli status` 显示 `Connected`
 - [ ] `curl -x socks5://127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace` 输出 `warp=on`
 - [ ] 访问 AI 服务时出口 IP 与 VPS 原生 IP 不同
-- [ ] 非 AI 流量仍走直连（未被 WARP 接管）
+- [ ] 非 AI 流量仍走直连，未被 WARP 接管
 
 ---
 
@@ -133,14 +121,13 @@ rules:
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| `warp-cli` 报命令不存在 | 版本差异 | 以 `warp-cli --help` 为准 |
-| 连不上 40000 端口 | 未设代理模式 | `warp-cli mode proxy` |
-| 出口 IP 没变 | 路由规则未生效 | 检查规则 `inboundTag` 是否匹配 |
-| WARP 连接不稳定 | Cloudflare 侧波动 | 保留直连作为回退，不要全量走 WARP |
+| `warp-cli` 命令不存在 | 版本差异 | 以 `warp-cli --help` 为准 |
+| 连不上 40000 | 未设代理模式 | `warp-cli mode proxy` |
+| 出口 IP 没变 | 路由规则未生效 | 检查 `inboundTag` 是否匹配 |
+| WARP 不稳定 | Cloudflare 侧波动 | 保留直连作为回退，不要全量走 WARP |
 
 ---
 
-## 参考资料
+## 参考
 
-- Cloudflare WARP — <https://developers.cloudflare.com/warp-client/>
-- Cloudflare WARP Linux 客户端 — <https://pkg.cloudflareclient.com/>
+- Cloudflare WARP — https://developers.cloudflare.com/warp-client/

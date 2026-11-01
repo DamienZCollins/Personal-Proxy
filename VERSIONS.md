@@ -1,22 +1,17 @@
 # 版本基线
 
-代理生态迭代较快，本仓库所有配置以本表版本为基准核对。
-
 **最后核对：2026-11-01**
-
----
-
-## 当前基线
 
 | 组件 | 基线版本 | 发布时间 | 用途 |
 |---|---|---|---|
-| Xray-core | v26.10.31 | 2026-10-31 | 服务端：VLESS + XHTTP / REALITY |
+| Xray-core | v26.10.31 | 2026-10-31 | 服务端：REALITY / XHTTP |
 | hysteria | v2.x | — | 服务端：Hysteria2 |
 | mihomo | v1.19.33 | 2026-10-21 | 客户端内核 |
 | Clash Verge Rev | v2.5.8 | 2026-10-09 | 客户端 GUI |
 | sing-box | v1.14.4 | 2026-10-24 | 备选客户端内核 |
+| v2rayN | 7.25.6 | 2026-10-11 | Windows GUI（多内核）|
 
-> 表中版本会随时间过时。Agent 部署前应重新查询，见 `AGENTS.md` 第 8 节。
+> 版本会随时间过时。Agent 部署前应重新查询，见 `AGENTS.md` 第 8 节。
 
 ---
 
@@ -36,16 +31,31 @@ Linux 内核被爆出监听 IPv4 MPTCP 极易被远程利用获取 root 权限�
 
 | 组件 | 变更 | 影响与替代 |
 |---|---|---|
+| Xray | 裸 VLESS（无 Flow）弃用 | 加 `"flow": "xtls-rprx-vision"`；XHTTP 场景留空 |
 | Xray | 移除 `allowInsecure` | 改用 `pinnedPeerCertSha256`（字符串，非数组）|
-| Xray | `verifyPeerCertByName` 对自签证书无效 | 仅校验域名，不信任签名；自签场景用证书固定 |
+| Xray | `verifyPeerCertByName` 对自签无效 | 仅校验域名不信任签名，自签用证书固定 |
 | sing-box | `insecure` 相关旧字段移除 | 改用 `tls.insecure` |
 | Xray | 传输层 `tcp` 明确称为 `raw` | 旧名仍兼容，非破坏性 |
+| Xray | `realitySettings.dest` → `target` | 旧名仍兼容 |
 
 ---
 
-## 客户端枚举值（v2rayN）
+## 协议现状（2026-11）
 
-v2rayN 数据库 `ProfileItem.CoreType` 取值：
+| 协议 | 状态 | 定位 |
+|---|---|---|
+| VLESS + REALITY + Vision | ✅ 主流推荐 | 直连首选，伪装性最好 |
+| Hysteria2 | ✅ 主流 | UDP 场景性能最好 |
+| VLESS + XHTTP | ✅ 官方主线 | 过 CDN 唯一方案，仍在演进 |
+| VLESS 无 Flow | ⚠️ 已弃用 | 尽快迁移 |
+| TUIC | 🟡 可用 | 生态小于 Hy2 |
+| VMess / 原版 SS / Trojan | ⚠️ 老协议 | 不推荐新部署 |
+
+---
+
+## v2rayN 核心类型枚举
+
+数据库 `ProfileItem.CoreType` 取值：
 
 ```text
 1  = v2fly        2  = Xray        4  = v2fly_v5
@@ -55,11 +65,11 @@ v2rayN 数据库 `ProfileItem.CoreType` 取值：
 29 = shadowquic   30 = mieru       99 = v2rayN
 ```
 
-Hysteria2 节点建议设为 `24`（sing-box），因为 mihomo / sing-box 均原生支持自签证书跳过校验。
+Hysteria2 节点建议设为 `24`（sing-box），因为 mihomo / sing-box 原生支持自签证书跳过校验。
 
 ---
 
-## 如何自行核对
+## 自行核对
 
 ```bash
 gh api repos/XTLS/Xray-core/releases/latest --jq '.tag_name, .published_at'
